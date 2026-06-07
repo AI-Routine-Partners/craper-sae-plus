@@ -107,32 +107,54 @@ app.post('/api/consultar-cliente', async (req, res) => {
         // 2. Presionamos la tecla 'Enter' para lanzar la búsqueda
         await page.keyboard.press('Enter');
 
-        // Le damos unos 3 segundos para que el sistema piense y muestre la tabla de resultados
-        // El robot esperará hasta que las filas de la tabla aparezcan (y ni un milisegundo más)
-        await page.waitForSelector('#dt_listar_abonados tbody tr', { state: 'visible' });
-        console.log('Extrayendo el resumen de la tabla a la velocidad de la luz...');
+        // Carrera (Race) entre la tabla y el identificador único del perfil
+        const resultadoCarrera = await Promise.race([
+            page.waitForSelector('#dt_listar_abonados tbody tr', { state: 'visible' }).then(() => 'tabla'),
+            page.waitForSelector('#n_contrato1_div', { state: 'visible' }).then(() => 'perfil')
+        ]);
 
-        // Extraemos la información de TODAS las filas de la tabla de una sola vez
-        const cuentasEncontradas = await page.evaluate(() => {
-            const filas = document.querySelectorAll('#dt_listar_abonados tbody tr');
-            const lista = [];
+        let cuentasEncontradas = [];
 
-            filas.forEach(fila => {
-                const columnas = fila.querySelectorAll('td');
+        if (resultadoCarrera === 'tabla') {
+            console.log('Apareció la tabla de resultados múltiples. Extrayendo resumen...');
+            cuentasEncontradas = await page.evaluate(() => {
+                const filas = document.querySelectorAll('#dt_listar_abonados tbody tr');
+                const lista = [];
 
-                if (columnas.length > 5) { // Verificamos que sea una fila real de datos
-                    lista.push({
-                        nro_abonado: columnas[0]?.innerText.trim() || '',
-                        nombre: columnas[2]?.innerText.trim() || '',
-                        saldo_actual: columnas[3]?.innerText.trim() || '',
-                        estatus: columnas[4]?.innerText.trim() || '',
-                        barrio: columnas[5]?.innerText.trim() || '',
-                        sector: columnas[6]?.innerText.trim() || ''
-                    });
-                }
+                filas.forEach(fila => {
+                    const columnas = fila.querySelectorAll('td');
+
+                    if (columnas.length > 5) {
+                        lista.push({
+                            nro_abonado: columnas[0]?.innerText.trim() || '',
+                            nombre: columnas[2]?.innerText.trim() || '',
+                            saldo_actual: columnas[3]?.innerText.trim() || '',
+                            estatus: columnas[4]?.innerText.trim() || '',
+                            barrio: columnas[5]?.innerText.trim() || '',
+                            sector: columnas[6]?.innerText.trim() || ''
+                        });
+                    }
+                });
+                return lista;
             });
-            return lista;
-        });
+        } else if (resultadoCarrera === 'perfil') {
+            console.log('Apareció directamente el perfil único. Extrayendo resumen básico...');
+            const cuentaUnica = await page.evaluate(() => {
+                const getText = (selector) => {
+                    const el = document.querySelector(selector);
+                    return el ? el.innerText.trim() : '';
+                };
+                return {
+                    nro_abonado: getText('#n_contrato1_div'),
+                    nombre: getText('#cliente_label'),
+                    saldo_actual: getText('#saldo1_div'),
+                    estatus: getText('#id_status_div'),
+                    barrio: getText('#barrio_label'),
+                    sector: getText('#municipio_label')
+                };
+            });
+            cuentasEncontradas.push(cuentaUnica);
+        }
 
         console.log(`¡Se extrajo el resumen de ${cuentasEncontradas.length} cuentas al instante!`);
 
@@ -212,26 +234,33 @@ app.post('/api/detalles-abonado', async (req, res) => {
         // Buscar por cédula
         await page.fill('#cedula_b', cedula);
         await page.keyboard.press('Enter');
-        await page.waitForSelector('#dt_listar_abonados tbody tr', { state: 'visible' });
+        const resultadoCarrera = await Promise.race([
+            page.waitForSelector('#dt_listar_abonados tbody tr', { state: 'visible' }).then(() => 'tabla'),
+            page.waitForSelector('#n_contrato1_div', { state: 'visible' }).then(() => 'perfil')
+        ]);
 
-        console.log('Tabla cargada, buscando el abonado específico...');
+        if (resultadoCarrera === 'tabla') {
+            console.log('Tabla cargada, buscando el abonado específico...');
+            const fila = page.locator('#dt_listar_abonados tbody tr').filter({ hasText: numero_abonado });
 
-        // Dar clic en la fila que contenga el número de abonado
-        const fila = page.locator('#dt_listar_abonados tbody tr').filter({ hasText: numero_abonado });
+            if (await fila.count() === 0) {
+                console.log('No se encontró el abonado en la tabla.');
+                return res.status(404).json({ success: false, error: 'Abonado no encontrado en la lista' });
+            }
 
-        if (await fila.count() === 0) {
-            console.log('No se encontró el abonado en la tabla.');
-            return res.status(404).json({ success: false, error: 'Abonado no encontrado en la lista' });
+            console.log('Abonado encontrado, haciendo clic para entrar al perfil...');
+            await fila.first().click();
+            await page.waitForSelector('#n_contrato1_div');
+            await page.waitForTimeout(500); 
+        } else if (resultadoCarrera === 'perfil') {
+            console.log('Perfil único cargado directamente. Verificando que sea el abonado correcto...');
+            // Verificamos si el numero de abonado cargado es el que estamos buscando
+            const abonadoEnPantalla = await page.locator('#n_contrato1_div').innerText();
+            if (abonadoEnPantalla.trim() !== numero_abonado) {
+                return res.status(404).json({ success: false, error: `El único abonado encontrado (${abonadoEnPantalla.trim()}) no coincide con el buscado (${numero_abonado}).` });
+            }
         }
 
-        console.log('Abonado encontrado, haciendo clic para entrar al perfil...');
-        // Le damos clic a la fila (o primer celda de la fila) para abrir el perfil
-        await fila.first().click();
-
-        // Esperamos a que cargue la nueva pantalla del perfil asegurándonos de que un ID vital existe
-        await page.waitForSelector('#n_contrato1_div');
-        // Pequeña espera por si hay tablas internas que cargan asíncronamente
-        await page.waitForTimeout(500); 
         console.log('Perfil cargado exitosamente. Extrayendo datos estructurados...');
 
         const datosEstructurados = await page.evaluate(() => {
