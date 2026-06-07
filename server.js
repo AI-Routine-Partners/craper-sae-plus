@@ -261,7 +261,15 @@ app.post('/api/detalles-abonado', async (req, res) => {
             }
         }
 
-        console.log('Perfil cargado exitosamente. Extrayendo datos estructurados...');
+        console.log('Cargando histórico de Estado de Cuenta...');
+        await page.click('a#edo_btn').catch(()=>console.log("No se pudo hacer clic en Estado de Cuenta"));
+        await page.waitForTimeout(800);
+
+        console.log('Cargando histórico de Operaciones...');
+        await page.click('a#ope_btn').catch(()=>console.log("No se pudo hacer clic en Operaciones"));
+        await page.waitForTimeout(800);
+
+        console.log('Perfil y pestañas cargados exitosamente. Extrayendo datos estructurados...');
 
         const datosEstructurados = await page.evaluate(() => {
             const getText = (selector) => {
@@ -351,6 +359,43 @@ app.post('/api/detalles-abonado', async (req, res) => {
                         });
                     }
                     return equipos;
+                })(),
+                "Estado de Cuenta (Ultimos 3)": (() => {
+                    const registros = [];
+                    const trs = document.querySelectorAll('#edo_cuenta_resp tbody tr');
+                    for (let i = 0; i < Math.min(trs.length, 3); i++) {
+                        const tds = trs[i].querySelectorAll('td');
+                        if (tds.length >= 7) {
+                            registros.push({
+                                "Fecha": tds[0]?.innerText.trim(),
+                                "Nro_Documento": tds[1]?.innerText.trim(),
+                                "Tipo": tds[2]?.innerText.trim(),
+                                "Descripcion": tds[3]?.innerText.trim(),
+                                "Cargo": tds[4]?.innerText.trim(),
+                                "Abono": tds[5]?.innerText.trim(),
+                                "Saldo": tds[6]?.innerText.trim()
+                            });
+                        }
+                    }
+                    return registros;
+                })(),
+                "Operaciones (Ultimas 3)": (() => {
+                    const registros = [];
+                    const trs = document.querySelectorAll('#operacion_resp tbody tr');
+                    for (let i = 0; i < Math.min(trs.length, 3); i++) {
+                        const tds = trs[i].querySelectorAll('td');
+                        if (tds.length >= 8) {
+                            registros.push({
+                                "Nro_Orden": tds[0]?.innerText.trim(),
+                                "Fecha_Emision": tds[1]?.innerText.trim(),
+                                "Tipo_Orden": tds[5]?.innerText.trim(),
+                                "Orden": tds[6]?.innerText.trim(),
+                                "Estatus": tds[7]?.innerText.trim(),
+                                "Observacion": tds[8]?.innerText.trim()
+                            });
+                        }
+                    }
+                    return registros;
                 })()
             };
             return datos;
