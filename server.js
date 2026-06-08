@@ -5,6 +5,58 @@ const { chromium } = require('playwright');
 const app = express();
 app.use(express.json());
 
+let globalBrowser;
+let globalContext;
+
+// Función para inicializar el navegador global
+async function initBrowser() {
+    const isDevMode = process.env.DEV_MODE === 'true';
+    globalBrowser = await chromium.launch({ headless: !isDevMode });
+    globalContext = await globalBrowser.newContext();
+
+    if (!isDevMode) {
+        await globalContext.route('**/*', route => {
+            const type = route.request().resourceType();
+            if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
+                route.abort();
+            } else {
+                route.continue();
+            }
+        });
+    }
+    console.log("Navegador global iniciado y optimizado.");
+}
+
+// Helper para iniciar sesión si es necesario
+async function ensureLogin(page) {
+    const urlLogin = 'https://tunorte.saeplus.com/';
+    console.log('Navegando a SAE Plus...');
+    await page.goto(urlLogin);
+
+    // Si encontramos el formulario de login, significa que no hay sesión o caducó
+    if (await page.locator('#login_usuario').count() > 0) {
+        console.log('Sesión no encontrada o caducada. Iniciando sesión...');
+        await page.fill('#login_usuario', process.env.SYSTEM_USERNAME);
+        await page.fill('#pass_usuario', process.env.SYSTEM_PASSWORD);
+        await page.click('#iniciar');
+        await page.waitForTimeout(1000);
+        await page.click('#iniciar');
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForSelector('text="Abonados"');
+    } else {
+        console.log('Sesión activa detectada. Reutilizando...');
+    }
+
+    // El popup puede salir tanto al loguear como al recargar el dashboard.
+    // Siempre intentaremos cerrarlo de forma segura.
+    try {
+        await page.click('.bootstrap-dialog-footer-buttons button', { timeout: 1500 });
+        console.log('Pop-up cerrado con éxito.');
+    } catch (e) {
+        // Ignorar
+    }
+}
+
 // Ruta que será llamada desde el webhook de n8n
 app.post('/api/consultar-cliente', async (req, res) => {
     const { cedula } = req.body;
@@ -13,101 +65,35 @@ app.post('/api/consultar-cliente', async (req, res) => {
         return res.status(400).json({ error: 'El número de cédula es requerido' });
     }
 
-    let browser;
+    if (!globalContext) {
+        return res.status(500).json({ error: 'El navegador global no está listo aún' });
+    }
+
+    let page;
     try {
         console.log(`Iniciando consulta para la cédula: ${cedula}`);
+        page = await globalContext.newPage();
+        
+        // Interceptar y cerrar cualquier pestaña nueva que intente abrir la página (ej: anuncios de pagos)
+        page.on('popup', async popup => {
+            console.log('Bloqueando ventana emergente (popup) de publicidad.');
+            await popup.close();
+        });
 
-        const isDevMode = process.env.DEV_MODE === 'true';
-        // 1. Iniciamos el navegador en modo invisible (headless) o visual según el entorno
-        browser = await chromium.launch({ headless: !isDevMode });
-        const context = await browser.newContext();
-
-        // Bloqueo agresivo de recursos pesados para acelerar la carga
-        if (!isDevMode) {
-            await context.route('**/*', route => {
-                const type = route.request().resourceType();
-                if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
-                    route.abort();
-                } else {
-                    route.continue();
-                }
-            });
-        }
-
-        const page = await context.newPage();
-
-        // -------------------------------------------------------------
-        // TODO: REEMPLAZA ESTA URL POR LA DEL SISTEMA OBJETIVO
-        // -------------------------------------------------------------
-        const urlLogin = 'https://tunorte.saeplus.com/';
-
-        console.log('Navegando a la página de login...');
-        await page.goto(urlLogin);
-
-
-
-        // -------------------------------------------------------------
-        // TODO: AJUSTA LOS SELECTORES CSS (#id, .clase) SEGÚN LA PÁGINA REAL
-        // -------------------------------------------------------------
-
-        console.log('Iniciando sesión...');
-
-        // Escribe el usuario
-        await page.fill('#login_usuario', process.env.SYSTEM_USERNAME);
-
-        // Escribe la contraseña
-        await page.fill('#pass_usuario', process.env.SYSTEM_PASSWORD);
-
-        // Primer clic (esto hace que aparezca la nueva casilla)
-        await page.click('#iniciar');
-
-        // Esperamos 1 segundo para que la página termine de mostrar la casilla
-        await page.waitForTimeout(1000);
-
-        // Segundo clic (ahora sí, entra al sistema)
-        await page.click('#iniciar');
-
-        // Esperamos a que la estructura HTML cargue y aparezca el botón Abonados (Ultra rápido)
-        await page.waitForLoadState('domcontentloaded');
-        await page.waitForSelector('text="Abonados"');
-
-        console.log('Login exitoso (presuntamente).');
-        // --- INICIO DE MANEJO DE POP-UP ---
-        console.log('Intentando cerrar el Pop-up (si existe)...');
-        try {
-            // 100ms fue demasiado rápido para la animación. Le daremos 1.5s (1500ms) como equilibrio seguro.
-            await page.click('.bootstrap-dialog-footer-buttons button', { timeout: 1500 });
-            console.log('Pop-up cerrado con éxito.');
-        } catch (e) {
-            console.log('No salió ningún Pop-up o ya se cerró, continuamos.');
-        }
-        // --- FIN DE MANEJO DE POP-UP ---
+        await ensureLogin(page);
 
         console.log('Abriendo menú de Abonados...');
-
-        // Busca cualquier elemento en la pantalla que diga exactamente "Abonados" y le da clic
         await page.getByText('Abonados', { exact: true }).click();
-
-        // Le damos 1 segundo de espera para que la animación del submenú termine de bajar
         await page.waitForTimeout(100);
 
         console.log('Haciendo clic en Consultar Abonado...');
-
-        // Buscamos el texto exacto en el submenú y le damos clic
         await page.getByText('Consultar Abonado', { exact: false }).click();
-
-        // Esperamos a que cargue la caja de texto en vez de toda la red
         await page.waitForSelector('#cedula_b');
 
         console.log('Escribiendo la cédula y buscando...');
-
-        // 1. Escribimos la cédula que n8n nos mandó en la caja de texto
         await page.fill('#cedula_b', cedula);
-
-        // 2. Presionamos la tecla 'Enter' para lanzar la búsqueda
         await page.keyboard.press('Enter');
 
-        // Carrera (Race) entre la tabla y el identificador único del perfil
         const resultadoCarrera = await Promise.race([
             page.waitForSelector('#dt_listar_abonados tbody tr', { state: 'visible' }).then(() => 'tabla'),
             page.waitForSelector('#n_contrato1_div', { state: 'visible' }).then(() => 'perfil')
@@ -138,7 +124,9 @@ app.post('/api/consultar-cliente', async (req, res) => {
                 return lista;
             });
         } else if (resultadoCarrera === 'perfil') {
-            console.log('Apareció directamente el perfil único. Extrayendo resumen básico...');
+            console.log('Apareció directamente el perfil único. Esperando a que carguen los datos (AJAX)...');
+            await page.waitForTimeout(1500); // Dar tiempo a que carguen los datos de dirección
+
             const cuentaUnica = await page.evaluate(() => {
                 const getText = (selector) => {
                     const el = document.querySelector(selector);
@@ -149,8 +137,8 @@ app.post('/api/consultar-cliente', async (req, res) => {
                     nombre: getText('#cliente_label'),
                     saldo_actual: getText('#saldo1_div'),
                     estatus: getText('#id_status_div'),
-                    barrio: getText('#barrio_label'),
-                    sector: getText('#municipio_label')
+                    barrio: getText('#sector_label'), // SAE Plus llama 'sector_label' al Barrio
+                    sector: getText('#municipio_label') // SAE Plus llama 'municipio_label' al Sector
                 };
             });
             cuentasEncontradas.push(cuentaUnica);
@@ -158,7 +146,6 @@ app.post('/api/consultar-cliente', async (req, res) => {
 
         console.log(`¡Se extrajo el resumen de ${cuentasEncontradas.length} cuentas al instante!`);
 
-        // Devolvemos la información a n8n sin haber entrado a ninguna cuenta
         res.json({
             success: true,
             cantidad_cuentas: cuentasEncontradas.length,
@@ -169,8 +156,8 @@ app.post('/api/consultar-cliente', async (req, res) => {
         console.error('Error durante la automatización:', error);
         res.status(500).json({ success: false, error: 'Hubo un error al procesar la solicitud.' });
     } finally {
-        if (browser) {
-            await browser.close();
+        if (page) {
+            await page.close();
         }
     }
 });
@@ -183,47 +170,22 @@ app.post('/api/detalles-abonado', async (req, res) => {
         return res.status(400).json({ error: 'La cédula y el número de abonado son requeridos' });
     }
 
-    let browser;
+    if (!globalContext) {
+        return res.status(500).json({ error: 'El navegador global no está listo aún' });
+    }
+
+    let page;
     try {
         console.log(`Iniciando consulta profunda para el abonado: ${numero_abonado} (Cédula: ${cedula})`);
+        page = await globalContext.newPage();
 
-        const isDevMode = process.env.DEV_MODE === 'true';
-        // Iniciamos el navegador en modo óptimo
-        browser = await chromium.launch({ headless: !isDevMode });
-        const context = await browser.newContext();
+        // Interceptar y cerrar cualquier pestaña nueva que intente abrir la página
+        page.on('popup', async popup => {
+            console.log('Bloqueando ventana emergente (popup) de publicidad.');
+            await popup.close();
+        });
 
-        // Bloqueo agresivo de recursos pesados
-        if (!isDevMode) {
-            await context.route('**/*', route => {
-                const type = route.request().resourceType();
-                if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
-                    route.abort();
-                } else {
-                    route.continue();
-                }
-            });
-        }
-
-        const page = await context.newPage();
-
-        const urlLogin = 'https://tunorte.saeplus.com/';
-        await page.goto(urlLogin);
-
-        // Login
-        await page.fill('#login_usuario', process.env.SYSTEM_USERNAME);
-        await page.fill('#pass_usuario', process.env.SYSTEM_PASSWORD);
-        await page.click('#iniciar');
-        await page.waitForTimeout(1000);
-        await page.click('#iniciar');
-        await page.waitForLoadState('domcontentloaded');
-        await page.waitForSelector('text="Abonados"');
-
-        // Cerrar Pop-up si existe (1500ms timeout para dar tiempo a la animación)
-        try {
-            await page.click('.bootstrap-dialog-footer-buttons button', { timeout: 1500 });
-        } catch (e) {
-            // Ignorar
-        }
+        await ensureLogin(page);
 
         // Navegar a buscador
         await page.getByText('Abonados', { exact: true }).click();
@@ -254,7 +216,6 @@ app.post('/api/detalles-abonado', async (req, res) => {
             await page.waitForTimeout(500); 
         } else if (resultadoCarrera === 'perfil') {
             console.log('Perfil único cargado directamente. Verificando que sea el abonado correcto...');
-            // Verificamos si el numero de abonado cargado es el que estamos buscando
             const abonadoEnPantalla = await page.locator('#n_contrato1_div').innerText();
             if (abonadoEnPantalla.trim() !== numero_abonado) {
                 return res.status(404).json({ success: false, error: `El único abonado encontrado (${abonadoEnPantalla.trim()}) no coincide con el buscado (${numero_abonado}).` });
@@ -306,15 +267,15 @@ app.post('/api/detalles-abonado', async (req, res) => {
                     "Departamento": getText('#estado_label'),
                     "Ciudad": getText('#ciudad_label'),
                     "Sector": getText('#municipio_label'),
-                    "Barrio": getText('#barrio_label'),
-                    "Avenida": getText('#av_label'),
-                    "Lote": getText('#lote_label')
+                    "Barrio": getText('#sector_label'),
+                    "Avenida": getText('#nombre_ubi_p_label'),
+                    "Lote": getText('#nombre_ubi_s_label')
                 },
                 "Datos de residencia": {
-                    "Tipo_Residencia": getText('#tipo_res_label'),
-                    "Nro_CasaApto": getText('#n_res_label'),
-                    "Punto_Referencia": getText('#pto_ref_label'),
-                    "Direccion_Fiscal": getText('#dir_fiscal_label')
+                    "Tipo_Residencia": getText('#tipo_casa_edif_label'),
+                    "Nro_CasaApto": getText('#numero_casa_label'),
+                    "Punto_Referencia": getText('#referencia_label'),
+                    "Direccion_Fiscal": getText('#direccion_fiscal_label')
                 },
                 "Datos de los servicios mensuales suscritos": (() => {
                     const servicios = [];
@@ -346,8 +307,6 @@ app.post('/api/detalles-abonado', async (req, res) => {
                         const trs = header.parentElement.querySelectorAll('table tbody tr');
                         trs.forEach(tr => {
                             const tds = tr.querySelectorAll('td');
-                            // Dependiendo de la estructura de la tabla de equipos, extraemos las columnas. 
-                            // Generalmente tienen 4-6 columnas.
                             if (tds.length >= 4) {
                                 equipos.push({
                                     "Equipo": tds[0]?.innerText.trim(),
@@ -410,14 +369,19 @@ app.post('/api/detalles-abonado', async (req, res) => {
         console.error('Error durante la automatización profunda:', error);
         res.status(500).json({ success: false, error: 'Hubo un error al procesar la solicitud profunda.' });
     } finally {
-        if (browser) {
-            await browser.close();
+        if (page) {
+            await page.close();
         }
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Servidor de automatización corriendo en http://localhost:${PORT}`);
-    console.log(`Endpoint disponible en: POST http://localhost:${PORT}/api/consultar-cliente`);
+// Iniciar el navegador antes de encender el servidor
+initBrowser().then(() => {
+    app.listen(PORT, () => {
+        console.log(`Servidor de automatización corriendo en http://localhost:${PORT}`);
+        console.log(`Endpoint disponible en: POST http://localhost:${PORT}/api/consultar-cliente`);
+    });
+}).catch(err => {
+    console.error("Error al iniciar el navegador global:", err);
 });
