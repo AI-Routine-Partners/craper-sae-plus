@@ -213,7 +213,7 @@ app.post('/api/detalles-abonado', async (req, res) => {
             console.log('Abonado encontrado, haciendo clic para entrar al perfil...');
             await fila.first().click();
             await page.waitForSelector('#n_contrato1_div');
-            await page.waitForTimeout(500); 
+            await page.waitForTimeout(1500); // Tiempo base para que inicie el AJAX
         } else if (resultadoCarrera === 'perfil') {
             console.log('Perfil único cargado directamente. Verificando que sea el abonado correcto...');
             const abonadoEnPantalla = await page.locator('#n_contrato1_div').innerText();
@@ -229,6 +229,29 @@ app.post('/api/detalles-abonado', async (req, res) => {
         console.log('Cargando histórico de Operaciones...');
         await page.click('a#ope_btn').catch(()=>console.log("No se pudo hacer clic en Operaciones"));
         await page.waitForTimeout(800);
+
+        console.log('Esperando activamente las tablas dinámicas (AJAX)...');
+        try {
+            // Esperar activamente la tabla de servicios
+            await page.waitForFunction(() => {
+                const headers = Array.from(document.querySelectorAll('.panel-heading'));
+                return headers.some(h => h.innerText.includes('SERVICIOS MENSUALES SUSCRITOS'));
+            }, { timeout: 5000 });
+            console.log('Tabla de Servicios detectada exitosamente.');
+        } catch(e) {
+            console.log('Timeout: La tabla de Servicios no se cargó a tiempo.');
+        }
+
+        try {
+            // Esperar activamente la tabla de equipos
+            await page.waitForFunction(() => {
+                const headers = Array.from(document.querySelectorAll('.panel-heading'));
+                return headers.some(h => h.innerText.includes('EQUIPO'));
+            }, { timeout: 3000 });
+            console.log('Tabla de Equipos detectada exitosamente.');
+        } catch(e) {
+            console.log('Timeout: La tabla de Equipos no se cargó a tiempo.');
+        }
 
         console.log('Perfil y pestañas cargados exitosamente. Extrayendo datos estructurados...');
 
