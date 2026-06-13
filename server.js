@@ -11,8 +11,8 @@ let globalContext;
 // Función para inicializar el navegador global
 async function initBrowser() {
     const isDevMode = process.env.DEV_MODE === 'true';
-    globalBrowser = await chromium.launch({ headless: !isDevMode });
-    globalContext = await globalBrowser.newContext();
+    globalBrowser = await chromium.launch({ headless: !isDevMode, args: ['--no-sandbox'] });
+    globalContext = await globalBrowser.newContext({ viewport: { width: 1920, height: 1080 } });
 
     if (!isDevMode) {
         await globalContext.route('**/*', route => {
@@ -226,8 +226,7 @@ app.post('/api/detalles-abonado', async (req, res) => {
         try {
             await page.waitForFunction(() => {
                 const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                // Usamos textContent en lugar de innerText por si Docker tiene pantalla pequeña y lo oculta
-                return headers.some(h => (h.textContent || '').includes('SERVICIOS MENSUALES SUSCRITOS'));
+                return headers.some(h => (h.textContent || '').toUpperCase().includes('SERVICIOS MENSUALES SUSCRITOS'));
             }, { timeout: 8000 });
             console.log('Tabla de Servicios detectada exitosamente.');
         } catch(e) {
@@ -237,7 +236,7 @@ app.post('/api/detalles-abonado', async (req, res) => {
         try {
             await page.waitForFunction(() => {
                 const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                return headers.some(h => (h.textContent || '').includes('EQUIPO'));
+                return headers.some(h => (h.textContent || '').toUpperCase().includes('EQUIPO'));
             }, { timeout: 3000 });
             console.log('Tabla de Equipos detectada exitosamente.');
         } catch(e) {
@@ -302,7 +301,7 @@ app.post('/api/detalles-abonado', async (req, res) => {
                 "Datos de los servicios mensuales suscritos": (() => {
                     const servicios = [];
                     const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                    const header = headers.find(h => (h.textContent || '').includes('SERVICIOS MENSUALES SUSCRITOS'));
+                    const header = headers.find(h => (h.textContent || '').toUpperCase().includes('SERVICIOS MENSUALES SUSCRITOS'));
                     if (header && header.parentElement) {
                         const trs = header.parentElement.querySelectorAll('table tbody tr');
                         trs.forEach(tr => {
@@ -324,7 +323,7 @@ app.post('/api/detalles-abonado', async (req, res) => {
                 "Datos de equipos": (() => {
                     const equipos = [];
                     const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                    const header = headers.find(h => (h.textContent || '').includes('EQUIPO'));
+                    const header = headers.find(h => (h.textContent || '').toUpperCase().includes('EQUIPO'));
                     if (header && header.parentElement) {
                         const trs = header.parentElement.querySelectorAll('table tbody tr');
                         trs.forEach(tr => {
