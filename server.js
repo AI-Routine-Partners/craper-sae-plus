@@ -222,6 +222,28 @@ app.post('/api/detalles-abonado', async (req, res) => {
             }
         }
 
+        console.log('Esperando activamente las tablas principales (AJAX) antes de abrir otras pestañas...');
+        try {
+            await page.waitForFunction(() => {
+                const headers = Array.from(document.querySelectorAll('.panel-heading'));
+                // Usamos textContent en lugar de innerText por si Docker tiene pantalla pequeña y lo oculta
+                return headers.some(h => (h.textContent || '').includes('SERVICIOS MENSUALES SUSCRITOS'));
+            }, { timeout: 8000 });
+            console.log('Tabla de Servicios detectada exitosamente.');
+        } catch(e) {
+            console.log('Timeout: La tabla de Servicios no se cargó a tiempo.');
+        }
+
+        try {
+            await page.waitForFunction(() => {
+                const headers = Array.from(document.querySelectorAll('.panel-heading'));
+                return headers.some(h => (h.textContent || '').includes('EQUIPO'));
+            }, { timeout: 3000 });
+            console.log('Tabla de Equipos detectada exitosamente.');
+        } catch(e) {
+            console.log('Timeout: La tabla de Equipos no se cargó a tiempo.');
+        }
+
         console.log('Cargando histórico de Estado de Cuenta...');
         await page.click('a#edo_btn').catch(()=>console.log("No se pudo hacer clic en Estado de Cuenta"));
         await page.waitForTimeout(800);
@@ -229,29 +251,6 @@ app.post('/api/detalles-abonado', async (req, res) => {
         console.log('Cargando histórico de Operaciones...');
         await page.click('a#ope_btn').catch(()=>console.log("No se pudo hacer clic en Operaciones"));
         await page.waitForTimeout(800);
-
-        console.log('Esperando activamente las tablas dinámicas (AJAX)...');
-        try {
-            // Esperar activamente la tabla de servicios
-            await page.waitForFunction(() => {
-                const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                return headers.some(h => h.innerText.includes('SERVICIOS MENSUALES SUSCRITOS'));
-            }, { timeout: 5000 });
-            console.log('Tabla de Servicios detectada exitosamente.');
-        } catch(e) {
-            console.log('Timeout: La tabla de Servicios no se cargó a tiempo.');
-        }
-
-        try {
-            // Esperar activamente la tabla de equipos
-            await page.waitForFunction(() => {
-                const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                return headers.some(h => h.innerText.includes('EQUIPO'));
-            }, { timeout: 3000 });
-            console.log('Tabla de Equipos detectada exitosamente.');
-        } catch(e) {
-            console.log('Timeout: La tabla de Equipos no se cargó a tiempo.');
-        }
 
         console.log('Perfil y pestañas cargados exitosamente. Extrayendo datos estructurados...');
 
@@ -303,7 +302,7 @@ app.post('/api/detalles-abonado', async (req, res) => {
                 "Datos de los servicios mensuales suscritos": (() => {
                     const servicios = [];
                     const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                    const header = headers.find(h => h.innerText.includes('SERVICIOS MENSUALES SUSCRITOS'));
+                    const header = headers.find(h => (h.textContent || '').includes('SERVICIOS MENSUALES SUSCRITOS'));
                     if (header && header.parentElement) {
                         const trs = header.parentElement.querySelectorAll('table tbody tr');
                         trs.forEach(tr => {
@@ -325,7 +324,7 @@ app.post('/api/detalles-abonado', async (req, res) => {
                 "Datos de equipos": (() => {
                     const equipos = [];
                     const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                    const header = headers.find(h => h.innerText.includes('EQUIPO'));
+                    const header = headers.find(h => (h.textContent || '').includes('EQUIPO'));
                     if (header && header.parentElement) {
                         const trs = header.parentElement.querySelectorAll('table tbody tr');
                         trs.forEach(tr => {
