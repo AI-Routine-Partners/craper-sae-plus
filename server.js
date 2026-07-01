@@ -323,21 +323,23 @@ app.post('/api/detalles-abonado', async (req, res) => {
                 "Datos de equipos": (() => {
                     const equipos = [];
                     const headers = Array.from(document.querySelectorAll('.panel-heading'));
-                    const header = headers.find(h => (h.textContent || '').toUpperCase().includes('EQUIPO'));
-                    if (header && header.parentElement) {
-                        const trs = header.parentElement.querySelectorAll('table tbody tr');
-                        trs.forEach(tr => {
-                            const tds = tr.querySelectorAll('td');
-                            if (tds.length >= 4) {
-                                equipos.push({
-                                    "Equipo": tds[0]?.innerText.trim(),
-                                    "MAC": tds[1]?.innerText.trim(),
-                                    "Marca": tds[2]?.innerText.trim(),
-                                    "Modelo": tds[3]?.innerText.trim()
-                                });
-                            }
-                        });
-                    }
+                    const equipmentHeaders = headers.filter(h => (h.textContent || '').toUpperCase().includes('EQUIPO'));
+                    equipmentHeaders.forEach(header => {
+                        if (header && header.parentElement) {
+                            const trs = header.parentElement.querySelectorAll('table tbody tr');
+                            trs.forEach(tr => {
+                                const tds = tr.querySelectorAll('td');
+                                if (tds.length >= 4) {
+                                    equipos.push({
+                                        "Equipo": tds[0]?.innerText.trim(),
+                                        "MAC": tds[1]?.innerText.trim(),
+                                        "Marca": tds[2]?.innerText.trim(),
+                                        "Modelo": tds[3]?.innerText.trim()
+                                    });
+                                }
+                            });
+                        }
+                    });
                     return equipos;
                 })(),
                 "Estado de Cuenta (Ultimos 3)": (() => {
