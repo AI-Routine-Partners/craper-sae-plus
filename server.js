@@ -398,6 +398,119 @@ app.post('/api/detalles-abonado', async (req, res) => {
     }
 });
 
+// Ruta para crear una orden técnica (Corte de internet)
+app.post('/api/crear-orden', async (req, res) => {
+    const { numero_abonado, descripcion_orden } = req.body;
+
+    if (!numero_abonado || !descripcion_orden) {
+        return res.status(400).json({ error: 'El número de abonado y la descripción son requeridos' });
+    }
+
+    if (!globalContext) {
+        return res.status(500).json({ error: 'El navegador global no está listo aún' });
+    }
+
+    let page;
+    try {
+        console.log(`Iniciando creación de orden para el abonado: ${numero_abonado}`);
+        page = await globalContext.newPage();
+
+        // Interceptar y cerrar cualquier pestaña nueva que intente abrir la página
+        page.on('popup', async popup => {
+            console.log('Bloqueando ventana emergente (popup) de publicidad.');
+            await popup.close();
+        });
+
+        await ensureLogin(page);
+
+        // Navegar a Operaciones > Órdenes Técnicas > Crear Orden
+        console.log('Navegando a Operaciones > Órdenes Técnicas > Crear Orden...');
+        await page.getByText('Operaciones', { exact: true }).click().catch(() => console.log("Clic Operaciones omitido/falló"));
+        await page.waitForTimeout(500);
+        await page.getByText('Órdenes Técnicas').click().catch(() => console.log("Clic Órdenes omitido/falló"));
+        await page.waitForTimeout(500);
+        await page.getByText('Crear Orden', { exact: true }).click();
+        
+        // Esperar a que cargue la interfaz de búsqueda
+        await page.waitForTimeout(1500);
+
+        // Buscar al abonado
+        console.log('Buscando al abonado...');
+        // Por seguridad en SAE Plus intentamos con el locator general o por name="abonado" si lo hubiera.
+        // Si hay varios inputs, usaremos el primero visible.
+        const abonadoInput = page.locator('input[type="text"]').first();
+        await abonadoInput.fill(numero_abonado);
+        
+        // Clic en la primera lupa (botón de búsqueda)
+        const btnLupa = page.locator('.fa-search, button[type="submit"], button.btn-primary').filter({ hasText: '' }).first();
+        if (await btnLupa.count() > 0) {
+             await btnLupa.click();
+        } else {
+             await page.keyboard.press('Enter');
+        }
+
+        // Esperar a que carguen los datos del abonado
+        console.log('Esperando resultados de la búsqueda...');
+        await page.waitForTimeout(3000); 
+
+        // Diligenciar la orden
+        console.log('Seleccionando "ORDEN DE SERVICIOS"...');
+        await page.locator('select').nth(0).selectOption({ label: 'ORDEN DE SERVICIOS' });
+        await page.waitForTimeout(1000); // Dar tiempo si el segundo select carga dinámicamente
+
+        console.log('Seleccionando "CORTE INTERNET GPON"...');
+        await page.locator('select').nth(1).selectOption({ label: 'CORTE INTERNET GPON' });
+        
+        console.log('Llenando descripción de la orden...');
+        await page.locator('textarea').first().fill(descripcion_orden);
+
+        // Registrar
+        console.log('Haciendo clic en REGISTRAR...');
+        await page.getByRole('button', { name: /REGISTRAR/i }).click();
+
+        // Manejar el popup de confirmación "¿Seguro que desea enviar este formulario?"
+        console.log('Esperando popup de confirmación...');
+        try {
+            const btnSi = page.locator('button').filter({ hasText: /^SI$/ }).first();
+            await btnSi.waitFor({ state: 'visible', timeout: 3000 });
+            await btnSi.click();
+            console.log('Confirmación aceptada (Botón SI presionado).');
+        } catch (e) {
+            console.log('No apareció el popup de confirmación o falló el clic.', e.message);
+        }
+
+        // Esperar el mensaje de éxito del sistema
+        console.log('Esperando respuesta final del sistema...');
+        await page.waitForTimeout(3000);
+        
+        // Intentar extraer algún mensaje
+        let mensajeExito = 'Orden registrada con éxito (Mensaje no capturable visualmente)';
+        try {
+            const popupText = await page.locator('.bootstrap-dialog-message, .sweet-alert, .modal-body').innerText({ timeout: 2000 });
+            if (popupText) {
+                mensajeExito = popupText.trim();
+                console.log(`Mensaje del sistema: ${mensajeExito}`);
+            }
+        } catch(e) {
+            console.log('No se detectó un popup con el mensaje exacto.');
+        }
+
+        res.json({
+            success: true,
+            mensaje: mensajeExito,
+            abonado: numero_abonado
+        });
+
+    } catch (error) {
+        console.error('Error durante la creación de orden:', error);
+        res.status(500).json({ success: false, error: 'Hubo un error al procesar la creación de la orden técnica.' });
+    } finally {
+        if (page) {
+            await page.close();
+        }
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 // Iniciar el navegador antes de encender el servidor
 initBrowser().then(() => {
